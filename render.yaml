@@ -23,6 +23,9 @@ services:
         value: https://api.deepseek.com/chat/completions
       - key: LLM_MODEL
         value: deepseek-flash
+      # Without this, DeepSeek's reasoning text is spoken aloud during the call.
+      - key: LLM_EXTRA_PARAMS
+        value: '{"thinking":{"type":"disabled"}}'
       - key: LLM_API_KEY
         sync: false
       - key: MURF_API_KEY

@@ -10,6 +10,7 @@
     "start": "npm run build:client && tsx src/server.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/client",
     "murf:smoke": "tsx src/scripts/murf-smoke.ts",
+    "chat:sim": "tsx src/scripts/chat-sim.ts",
     "call:register": "tsx src/scripts/register-call.ts",
     "verify": "bash scripts/verify.sh",
     "test": "node --import tsx --test \"src/**/*.test.ts\""

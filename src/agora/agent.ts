@@ -39,7 +39,7 @@ export function buildJoinBody(i: z.output<typeof startAgentInput>, agentToken: s
         greeting_message: GREETING,
         failure_message: 'Sorry, one moment please.',
         max_history: 32,
-        params: { model: a.LLM_MODEL },
+        params: { model: a.LLM_MODEL, ...a.LLM_EXTRA_PARAMS },
       },
       tts: {
         vendor: 'murf',

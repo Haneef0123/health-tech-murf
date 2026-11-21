@@ -8,6 +8,8 @@ Object.assign(process.env, {
   AGORA_CUSTOMER_SECRET: 'secret',
   LLM_API_KEY: 'llm',
   MURF_API_KEY: 'murf',
+  LLM_MODEL: 'gpt-4o-mini',
+  LLM_EXTRA_PARAMS: '{"thinking":{"type":"disabled"}}',
   WEBHOOK_SECRET: 'x'.repeat(16),
   PUBLIC_BASE_URL: 'https://example.test',
 });
@@ -21,6 +23,8 @@ test('join body wires Murf TTS and short-turn prompt', async () => {
   assert.equal(tts.params.rate, -6);
   assert.equal(tts.params.sample_rate, 24000);
   assert.match(llm.system_messages[0].content, /1 or 2 short sentences/);
+  assert.match(llm.system_messages[0].content, /Call tools silently/);
+  assert.deepEqual(llm.params, { model: 'gpt-4o-mini', thinking: { type: 'disabled' } });
   assert.deepEqual(body.properties.remote_rtc_uids, ['1002']);
   assert.equal(body.properties.advanced_features.enable_tools, true);
   assert.equal(llm.template_variables.call_id, 'c1');

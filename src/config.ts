@@ -21,6 +21,16 @@ const agoraSchema = z.object({
   LLM_URL: z.string().default('https://api.openai.com/v1/chat/completions'),
   LLM_API_KEY: z.string().min(1),
   LLM_MODEL: z.string().default('gpt-4o-mini'),
+  // Extra request params merged into the LLM call, as a JSON object. DeepSeek needs {"thinking":{"type":"disabled"}}
+  // or its reasoning text is spoken aloud.
+  LLM_EXTRA_PARAMS: z.string().default('{}').transform((s, ctx) => {
+    try {
+      const v = JSON.parse(s);
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch { /* falls through to the issue below */ }
+    ctx.addIssue({ code: 'custom', message: 'must be a JSON object' });
+    return z.NEVER;
+  }),
 });
 
 const serverSchema = z.object({
