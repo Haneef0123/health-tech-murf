@@ -16,22 +16,39 @@ let mic: IMicrophoneAudioTrack | undefined;
 let feed: EventSource | undefined;
 let agentId: string | undefined;
 
+const CHIP = { sys: ['System', ''], err: ['Error', 'pill-neg'], tool: ['Tool', 'pill-primary'], alert: ['Nurse alert', 'pill-neg'] } as const;
+
 // textContent only: tool results can contain patient-supplied text
-function log(kind: 'sys' | 'err' | 'tool' | 'alert', text: string, ts = new Date().toISOString()) {
+function log(kind: keyof typeof CHIP, text: string, ts = new Date().toISOString(), detail?: string) {
+  eventsEl.querySelector('.feed-empty')?.remove();
   const li = document.createElement('li');
-  li.className = kind;
+  li.className = `feed-item ${kind}`;
+  const chip = document.createElement('span');
+  chip.className = `pill chip ${CHIP[kind][1]}`.trim();
+  chip.textContent = CHIP[kind][0];
+  const title = document.createElement('div');
+  title.className = 'feed-title';
+  title.textContent = text;
   const t = document.createElement('time');
   t.textContent = new Date(ts).toLocaleTimeString();
-  li.append(t, text);
+  li.append(chip, title, t);
+  if (detail) {
+    const pre = document.createElement('pre');
+    pre.className = 'feed-detail';
+    pre.textContent = detail;
+    li.append(pre);
+  }
   eventsEl.append(li);
   li.scrollIntoView({ block: 'nearest' });
 }
-const setStatus = (s: string) => (statusEl.textContent = s);
+
+const STATE = { idle: 'pill pill-dot', busy: 'pill pill-primary', live: 'pill pill-pos pill-dot', fail: 'pill pill-neg' } as const;
+const setStatus = (s: string, state: keyof typeof STATE = 'busy') => { statusEl.textContent = s; statusEl.className = STATE[state]; };
 const setBusy = (inCall: boolean) => { startBtn.disabled = inCall; stopBtn.disabled = !inCall; };
 
 function render(e: CallEvent) {
-  if (e.type === 'alert') return log('alert', `NURSE ALERT (${e.reason}): ${e.details}`, e.ts);
-  log('tool', `${e.tool}(${JSON.stringify(e.args)}) -> ${JSON.stringify(e.result)}`, e.ts);
+  if (e.type === 'alert') return log('alert', `Nurse alert: ${e.reason}`, e.ts, e.details);
+  log('tool', `${e.tool}(${JSON.stringify(e.args)})`, e.ts, JSON.stringify(e.result, null, 2));
 }
 
 async function post(path: string, body: unknown) {
@@ -44,6 +61,7 @@ async function post(path: string, body: unknown) {
 async function start() {
   setBusy(true);
   eventsEl.replaceChildren();
+  speakingEl.classList.remove('on');
   try {
     setStatus('Starting agent...');
     const channel = `checkin-${Math.random().toString(36).slice(2, 8)}`;
@@ -64,28 +82,29 @@ async function start() {
     rtc.enableAudioVolumeIndicator();
     rtc.on('volume-indicator', (vols) => {
       const agent = vols.find((v) => v.uid === s.agentUid);
-      speakingEl.textContent = agent && agent.level > 5 ? 'Agent speaking...' : '';
+      speakingEl.classList.toggle('on', Boolean(agent && agent.level > 5));
     });
 
     setStatus('Joining channel...');
     await rtc.join(s.appId, s.channel, s.userToken, s.userUid);
     const track = (mic = await AgoraRTC.createMicrophoneAudioTrack({ AEC: true, ANS: true, AGC: true }));
     await rtc.publish(track);
-    setStatus('In call: speak when the agent greets you');
+    setStatus('In call', 'live');
+    log('sys', 'Connected. Speak when the agent greets you.');
   } catch (e) {
     log('err', e instanceof Error ? e.message : String(e));
-    await stop('Failed to start');
+    await stop('Failed to start', 'fail');
   }
 }
 
-async function stop(finalStatus = 'Idle') {
+async function stop(finalStatus = 'Idle', state: keyof typeof STATE = 'idle') {
   feed?.close();
   mic?.close();
   await client?.leave().catch(() => {});
   if (agentId) await post('/api/agent/stop', { agentId }).catch((e) => log('err', `stop failed: ${e.message}`));
   client = mic = feed = agentId = undefined;
-  speakingEl.textContent = '';
-  setStatus(finalStatus);
+  speakingEl.classList.remove('on');
+  setStatus(finalStatus, state);
   setBusy(false);
 }
 
@@ -106,7 +125,7 @@ async function loadPatients() {
 void loadPatients();
 
 startBtn.onclick = start;
-stopBtn.onclick = () => stop('Call ended');
+stopBtn.onclick = () => stop('Call ended', 'idle');
 // Best effort so closing the tab does not leave a billed agent running (idle_timeout is the backstop).
 addEventListener('pagehide', () => {
   if (agentId) navigator.sendBeacon('/api/agent/stop', new Blob([JSON.stringify({ agentId })], { type: 'application/json' }));

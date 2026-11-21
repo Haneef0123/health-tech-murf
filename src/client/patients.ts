@@ -10,7 +10,15 @@ const listEl = $('list');
 const msg = $('msg');
 let editingId: string | undefined;
 
-const say = (s: string, err = false) => { msg.textContent = s; msg.className = err ? 'err' : ''; };
+const say = (s: string, err = false) => { msg.textContent = s; msg.className = `alert-box ${err ? 'neg' : 'pos'}`; msg.hidden = !s; };
+
+const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text = '') => {
+  const e = document.createElement(tag);
+  e.className = cls;
+  e.textContent = text;
+  return e;
+};
+const highlight = () => { for (const tr of Array.from(listEl.children) as HTMLElement[]) tr.setAttribute('aria-selected', String(tr.dataset.id === editingId)); };
 
 async function api(path: string, method = 'GET', body?: unknown) {
   const res = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -43,27 +51,46 @@ function fill(p?: Patient) {
   link.hidden = !p || !p.active || !p.consent_ai_call;
   if (p) link.href = `/?patient=${encodeURIComponent(p.id)}`;
   say('');
+  highlight();
 }
 
 async function refresh() {
   const patients: Patient[] = await api(`/api/patients${$<HTMLInputElement>('showAll').checked ? '?all=1' : ''}`);
   listEl.replaceChildren();
-  for (const p of patients) {
+  if (!patients.length) {
     const tr = document.createElement('tr');
-    if (!p.active) tr.className = 'off';
-    for (const v of [`${p.first_name} ${p.last_name}`.trim(), p.birth_date, p.procedure_name, p.consent_ai_call ? 'yes' : 'no']) {
-      const td = document.createElement('td');
-      td.textContent = v;
-      tr.append(td);
-    }
-    const td = document.createElement('td');
-    const b = document.createElement('button');
-    b.textContent = 'Edit';
-    b.onclick = () => fill(p);
-    td.append(b);
+    const td = el('td', 'empty', 'No patients yet. Add one with New patient.');
+    td.colSpan = 4; // spans the Edit column too
     tr.append(td);
     listEl.append(tr);
+    return;
   }
+  for (const p of patients) {
+    const tr = document.createElement('tr');
+    tr.dataset.id = p.id;
+    tr.className = p.active ? '' : 'inactive';
+
+    const who = document.createElement('td');
+    who.append(el('div', 'name', `${p.first_name} ${p.last_name}`.trim()), el('div', 'sub', `Born ${p.birth_date}`));
+    const proc = el('td', 'hide-xs', p.procedure_name || '—');
+    const status = document.createElement('td');
+    const badges = el('div', 'row', '');
+    badges.style.gap = '6px';
+    badges.append(
+      el('span', `pill ${p.consent_ai_call ? 'pill-pos' : ''}`.trim(), p.consent_ai_call ? 'Consented' : 'No consent'),
+      ...(p.active ? [] : [el('span', 'pill', 'Inactive')]),
+    );
+    status.append(badges);
+    const act = document.createElement('td');
+    const b = el('button', 'btn btn-soft btn-sm', 'Edit');
+    b.type = 'button';
+    b.onclick = () => fill(p);
+    act.append(b);
+
+    tr.append(who, proc, status, act);
+    listEl.append(tr);
+  }
+  highlight();
 }
 
 $('form').addEventListener('submit', async (e) => {
