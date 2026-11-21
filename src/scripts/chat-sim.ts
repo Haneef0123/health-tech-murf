@@ -12,8 +12,8 @@ const turns = process.argv.slice(2);
 if (!turns.length) turns.push('March 14', 'yes I picked them up and took today\'s dose', 'I have a fever, no swelling, pain is a 4');
 
 const cfg = agoraConfig();
-const store = createStore(':memory:', '/tmp/chat-sim-alerts.log');
-store.createCall('sim', 'demo-001');
+const store = await createStore(':memory:', '/tmp/chat-sim-alerts.log');
+await store.createCall('sim', 'demo-001');
 const toolDefs = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.params } }));
 const messages: any[] = [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'assistant', content: GREETING }];
 console.log(`SPOKEN  agent: ${GREETING}`);
@@ -55,7 +55,7 @@ for (const turn of turns) {
     if (!msg.tool_calls?.length) break;
     for (const c of msg.tool_calls) {
       const tool = tools.find((t) => t.name === c.function.name)!;
-      const out = runTool(store, tool, { call_id: 'sim', tool_call_id: c.id, ...JSON.parse(c.function.arguments) });
+      const out = await runTool(store, tool, { call_id: 'sim', tool_call_id: c.id, ...JSON.parse(c.function.arguments) });
       console.log(`  tool  ${c.function.name}(${c.function.arguments}) -> ${JSON.stringify(out.body)}`);
       messages.push({ role: 'tool', tool_call_id: c.id, content: JSON.stringify(out.body) });
     }

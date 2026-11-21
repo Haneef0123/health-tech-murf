@@ -3,8 +3,11 @@ import { ZodError, z } from 'zod';
 import { startAgent, stopAgent } from './agora/agent.js';
 import { basicAuth } from './auth.js';
 import { serverConfig } from './config.js';
+import { HttpError } from './errors.js';
 import { subscribe } from './events.js';
 import { murfSmoke } from './murf/smoke.js';
+import { patientsRouter } from './patients/routes.js';
+import { getStore } from './store/store.js';
 import { webhookRouter } from './tools/routes.js';
 
 const app = express();
@@ -16,7 +19,18 @@ app.get('/health', (_req, res) => void res.json({ ok: true }));
 
 // Everything below needs the login (when BASIC_AUTH_PASS is set).
 app.use(basicAuth());
-app.use(express.static('public')); // browser test client (built by `npm run build:client`)
+app.use(express.static('public')); // browser pages (built by `npm run build:client`)
+app.use('/api/patients', patientsRouter());
+
+// Test helper: registers a call without starting an Agora agent, so the webhooks can be exercised with curl (npm run verify).
+// Not mounted on Render. The local PGlite database allows one process at a time, so a separate script can't do this while the server runs.
+if (!process.env.RENDER) {
+  app.post('/api/dev/register-call', async (req, res) => {
+    const b = z.object({ call_id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), patient_id: z.string().default('demo-001') }).parse(req.body);
+    await (await getStore()).createCall(b.call_id, b.patient_id);
+    res.json({ ok: true });
+  });
+}
 
 // Live call feed for the test client.
 app.get('/api/calls/:callId/events', (req, res) => {
@@ -47,8 +61,10 @@ app.post('/api/agent/stop', async (req, res) => {
 
 app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (err instanceof ZodError) return void res.status(400).json({ error: err.issues });
+  if (err instanceof HttpError) return void res.status(err.status).json({ error: err.message });
   res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
 });
 
+await getStore(); // connect and migrate before accepting traffic, so a bad DATABASE_URL fails at startup
 const { PORT } = serverConfig();
 app.listen(PORT, () => console.log(`listening on port ${PORT}`));

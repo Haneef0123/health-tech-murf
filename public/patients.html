@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Patients</title>
+  <style>
+    :root { color-scheme: light dark; --alert: #c62828; --muted: #777; }
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 980px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+    nav a { margin-right: 1rem; }
+    .grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 1.5rem; align-items: start; }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid #8883; }
+    th { color: var(--muted); font-weight: 600; font-size: .85em; }
+    tr.off td { color: var(--muted); text-decoration: line-through; }
+    label { display: block; margin: .6rem 0 .15rem; font-size: .85em; color: var(--muted); }
+    input[type=text], input[type=date], textarea, select { width: 100%; box-sizing: border-box; font: inherit; padding: .4rem; border-radius: 6px; border: 1px solid #8886; background: transparent; color: inherit; }
+    textarea { min-height: 6rem; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+    .check { display: flex; gap: .5rem; align-items: center; margin-top: .8rem; }
+    .check label { margin: 0; color: inherit; font-size: 1em; }
+    button { font: inherit; padding: .45rem .9rem; border-radius: 6px; border: 1px solid #8886; cursor: pointer; background: transparent; color: inherit; }
+    button.primary { background: #1b7f3b; border-color: #1b7f3b; color: #fff; }
+    button.danger { color: var(--alert); border-color: var(--alert); }
+    .row { display: flex; gap: .5rem; margin-top: 1rem; flex-wrap: wrap; }
+    #msg { min-height: 1.4em; margin-top: .6rem; }
+    #msg.err { color: var(--alert); }
+    .hint { color: var(--muted); font-size: .85em; }
+  </style>
+</head>
+<body>
+  <h1>Patients</h1>
+  <nav><a href="/">Check-in call</a> <a href="/patients.html">Patients</a></nav>
+  <p class="hint">Test data only. Do not enter real patient information until the hardening checklist is done.</p>
+  <div class="grid">
+    <section>
+      <div class="row" style="margin-top:0"><button id="new" class="primary">New patient</button><label class="check" style="margin:0"><input type="checkbox" id="showAll" /> <span>show inactive</span></label></div>
+      <table>
+        <thead><tr><th>Name</th><th>Birth date</th><th>Procedure</th><th>Consent</th><th></th></tr></thead>
+        <tbody id="list"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2 id="formTitle" style="font-size:1rem">New patient</h2>
+      <form id="form" autocomplete="off">
+        <div class="two">
+          <div><label for="first_name">First name</label><input type="text" id="first_name" required /></div>
+          <div><label for="last_name">Last name</label><input type="text" id="last_name" /></div>
+        </div>
+        <div class="two">
+          <div><label for="birth_date">Birth date (used for identity check)</label><input type="date" id="birth_date" required /></div>
+          <div><label for="discharge_date">Discharge date</label><input type="date" id="discharge_date" /></div>
+        </div>
+        <label for="procedure_name">Procedure or diagnosis</label><input type="text" id="procedure_name" />
+        <div class="two">
+          <div><label for="phone">Phone</label><input type="text" id="phone" /></div>
+          <div><label for="language">Language</label><input type="text" id="language" value="en-US" /></div>
+        </div>
+        <div class="two">
+          <div><label for="emergency_contact_name">Emergency contact</label><input type="text" id="emergency_contact_name" /></div>
+          <div><label for="emergency_contact_phone">Emergency contact phone</label><input type="text" id="emergency_contact_phone" /></div>
+        </div>
+        <label for="medications">Medications, one per line: name | dose | schedule</label>
+        <textarea id="medications" placeholder="Amoxicillin | 500 mg | three times a day"></textarea>
+        <div class="check"><input type="checkbox" id="consent_ai_call" /><label for="consent_ai_call">Patient consented to AI check-in calls</label></div>
+        <div class="row">
+          <button type="submit" class="primary" id="save">Save</button>
+          <button type="button" id="deactivate" class="danger" hidden>Deactivate</button>
+          <a id="callLink" hidden><button type="button">Start check-in call</button></a>
+        </div>
+        <div id="msg" role="status" aria-live="polite"></div>
+      </form>
+    </section>
+  </div>
+  <script type="module" src="/patients.js"></script>
+</body>
+</html>

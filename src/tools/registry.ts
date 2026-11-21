@@ -9,9 +9,9 @@ interface Tool {
   description: string;
   schema: z.ZodTypeAny;
   params: Params; // JSON Schema shown to the LLM; keep in sync with `schema`
-  handler: (s: Store, callId: string, args: any) => object;
+  handler: (s: Store, callId: string, args: any) => Promise<object>;
 }
-function defineTool<S extends z.ZodTypeAny>(t: Omit<Tool, 'schema' | 'handler'> & { schema: S; handler: (s: Store, callId: string, a: z.output<S>) => object }): Tool {
+function defineTool<S extends z.ZodTypeAny>(t: Omit<Tool, 'schema' | 'handler'> & { schema: S; handler: (s: Store, callId: string, a: z.output<S>) => Promise<object> }): Tool {
   return t;
 }
 
@@ -55,24 +55,27 @@ export const tools: Tool[] = [
 const envelope = z.object({ call_id: z.string().min(1), tool_call_id: z.string().min(1) }).passthrough();
 
 /** Idempotent on tool_call_id: a replay returns the stored response and changes nothing. */
-export function runTool(store: Store, tool: Tool, raw: unknown): { status: number; body: unknown; call_id?: string; args?: unknown; fresh?: boolean } {
+export async function runTool(store: Store, tool: Tool, raw: unknown): Promise<{ status: number; body: unknown; call_id?: string; args?: unknown; fresh?: boolean }> {
   const env = envelope.safeParse(raw);
   if (!env.success) return { status: 400, body: { ok: false, error: 'invalid_request' } };
   const { call_id, tool_call_id, ...rest } = env.data;
 
-  const prior = store.getResult(tool_call_id);
+  const prior = await store.getResult(tool_call_id);
   if (prior) return { status: 200, body: JSON.parse(prior) };
 
   const args = tool.schema.safeParse(rest);
   if (!args.success) {
     return { status: 400, body: { ok: false, error: 'invalid_arguments', issues: args.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) } };
   }
-  const body = store.transaction(() => {
-    const r = tool.handler(store, call_id, args.data);
-    store.saveResult(tool_call_id, call_id, tool.name, JSON.stringify(r));
-    return r;
+  const out = await store.transaction(async (tx) => {
+    await tx.lockToolCall(tool_call_id); // a concurrent duplicate waits here, then replays below
+    const raced = await tx.getResult(tool_call_id);
+    if (raced) return { body: JSON.parse(raced), fresh: false };
+    const body = await tool.handler(tx, call_id, args.data);
+    await tx.saveResult(tool_call_id, call_id, tool.name, JSON.stringify(body));
+    return { body, fresh: true };
   });
-  return { status: 200, body, call_id, args: args.data, fresh: true };
+  return out.fresh ? { status: 200, body: out.body, call_id, args: args.data, fresh: true } : { status: 200, body: out.body };
 }
 
 /** Tool definitions in Agora's `llm.tools` format: the engine POSTs the args to our webhook. */

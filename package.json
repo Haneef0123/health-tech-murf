@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "build:client": "esbuild src/client/app.ts --bundle --format=esm --outfile=public/app.js",
+    "build:client": "esbuild src/client/app.ts src/client/patients.ts --bundle --format=esm --outdir=public",
     "dev": "npm run build:client && tsx watch src/server.ts",
     "start": "npm run build:client && tsx src/server.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/client",
@@ -16,16 +18,19 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.5.17",
     "agora-rtc-sdk-ng": "^4.24.10",
     "agora-token": "^2.0.5",
     "dotenv": "^16.4.5",
     "express": "^5.1.0",
+    "pg": "^8.23.1",
     "ws": "^8.18.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
     "@types/ws": "^8.5.12",
     "esbuild": "^0.28.2",
     "tsx": "^4.19.0",

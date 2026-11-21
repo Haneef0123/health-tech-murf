@@ -7,11 +7,12 @@ Agora Conversational AI Engine (voice pipeline + tool calls) + Murf Falcon TTS. 
 Browser (Agora RTC)  <->  Agora channel  <->  Agora ConvoAI agent (ASR -> LLM -> Murf TTS)
                                                    |  tool calls (HTTPS POST + X-Webhook-Secret)
                                                    v
-                              this server: /webhooks/*  ->  SQLite  ->  nurse alert log + live feed
+                              this server: /webhooks/*  ->  Postgres (Supabase)  ->  nurse alert log + live feed
+                                           /patients.html: staff manage patient profiles
 ```
 
 ## 0. Prerequisites
-- Node **24+** (uses built-in `node:sqlite`; developed on Node 26).
+- Node **24+** (developed on Node 26).
 - Accounts/keys: Murf API key; Agora project (App ID + App Certificate) and RESTful Customer ID/Secret; an OpenAI-compatible LLM key; `ngrok` (or any public HTTPS tunnel).
 
 ## 1. Install and configure
@@ -47,11 +48,11 @@ Automated, 14 checks (auth, verification lockout, no meds before verification, r
 ```bash
 npm run verify
 ```
-Expect `ALL PASSED`. If you started the server with a custom `DB_PATH` / `NURSE_ALERT_LOG`, export the same values when running it.
+Expect `ALL PASSED`. If you started the server with a custom `NURSE_ALERT_LOG`, export the same value when running it. The script registers its test calls through `POST /api/dev/register-call`, a helper that exists only off Render.
 
 Manual equivalents. Register a call (the Agora start does this normally), then call the tools:
 ```bash
-npm run call:register -- demo-call
+curl -s -X POST localhost:3000/api/dev/register-call -H 'Content-Type: application/json' -d '{"call_id":"demo-call"}'
 SECRET=$(grep '^WEBHOOK_SECRET=' .env | cut -d= -f2)
 ```
 ```bash
@@ -83,6 +84,12 @@ curl -s -X POST localhost:3000/webhooks/verify-patient -H 'Content-Type: applica
 cat data/nurse-alerts.log
 ```
 
+## Database and patient profiles
+- **Local:** with no `DATABASE_URL`, the app runs an in-process Postgres (PGlite) in `data/pglite`. One server process at a time can use it.
+- **Supabase (needed on Render):** create a project at [supabase.com](https://supabase.com/), click **Connect**, copy the **Session pooler** connection string (the pooler works from IPv4-only hosts like Render), put your database password in it, and set it as `DATABASE_URL` in `.env` and in Render's Environment tab. The app creates its tables at startup (`src/store/schema.ts`), turns on row level security for every table (so Supabase's public API keys can read nothing), and seeds one fictional demo patient into an empty database.
+- **Profiles:** open `/patients.html` to add, edit and deactivate patients (name, birth date, procedure, medications with dose and schedule, contacts, consent). The call page lets you pick whom to call, and only patients who consented can be called. The agent verifies against that patient's birth date and asks about that patient's own medications. API: `GET/POST /api/patients`, `GET/PUT/DELETE /api/patients/:id` (behind the login).
+- **Lockout:** two wrong birth dates end a call, and four wrong guesses across calls within an hour lock the patient out of verification.
+
 ## 5. Real call
 1. Public tunnel to the server: `ngrok http 3000`. Put the `https://...` URL in `.env` as `PUBLIC_BASE_URL` and restart `npm run dev`. Agora's engine calls the webhooks from the internet, so this must be public HTTPS.
 2. Optional: start an agent from curl first, to check Agora credentials, the Murf params and the tool definitions.
@@ -109,7 +116,7 @@ Use this if you can't run a tunnel (for example a corporate proxy blocks ngrok).
    ```
    Then create an empty private repo on GitHub and push to it (GitHub shows the exact two commands).
 2. In [Render](https://render.com/): **New → Blueprint**, pick that repo. Render reads [render.yaml](render.yaml).
-3. Render asks for the secret values. Paste from your `.env`: `LLM_API_KEY`, `MURF_API_KEY`, `AGORA_APP_ID`, `AGORA_APP_CERTIFICATE`, `AGORA_CUSTOMER_ID`, `AGORA_CUSTOMER_SECRET`. `WEBHOOK_SECRET` and `BASIC_AUTH_PASS` are generated for you.
+3. Render asks for the secret values. Paste from your `.env`: `DATABASE_URL` (Supabase session pooler string, see above), `LLM_API_KEY`, `MURF_API_KEY`, `AGORA_APP_ID`, `AGORA_APP_CERTIFICATE`, `AGORA_CUSTOMER_ID`, `AGORA_CUSTOMER_SECRET`. `WEBHOOK_SECRET` and `BASIC_AUTH_PASS` are generated for you.
 4. Deploy. When it's live, open the service's **Environment** tab and copy `BASIC_AUTH_PASS`. The username is `admin`.
 5. Check it:
    ```bash
@@ -121,7 +128,8 @@ Use this if you can't run a tunnel (for example a corporate proxy blocks ngrok).
 
 Notes:
 - The free plan sleeps after about 15 minutes idle. Hit `/health` and wait for the reply before a test call, or Agora's first tool call can time out.
-- The free plan also wipes the SQLite file and alert log on every restart or deploy. That's fine for demo data and not for anything you need to keep.
+- Data now lives in Supabase and survives deploys. The nurse alert log file on Render's disk is still wiped on every restart (alerts themselves are in the database).
+- The app refuses to start on Render without `DATABASE_URL`.
 - Webhooks use only the secret header, not the login, because Agora's servers can't type a password. The login covers the page and `/api/*`.
 - `BASIC_AUTH_PASS` is required on Render. The app refuses to start without it.
 
@@ -148,10 +156,10 @@ Do not use real patient data until every **Blocker** is done.
 ### Blockers
 - [ ] **BAAs / data-processing agreements** with every vendor that sees PHI: Agora (audio), Murf (text of every spoken sentence), the LLM provider (full transcript), your host, any tunnel/proxy, log/monitoring vendors. If a vendor will not sign, it cannot be in the path. Confirm the applicable law with compliance (HIPAA for US patients; India's DPDP Act, GDPR, etc. elsewhere).
 - [ ] **Real auth on `/api/*`.** The page and `/api/*` sit behind one shared Basic Auth password (`BASIC_AUTH_PASS`), with no lockout or rate limit, and `start` still accepts any `patientId`. Require authenticated staff or a signed, single-use, patient-bound call token. The live feed `/api/calls/:id/events` shows medication names.
-- [ ] **Stronger identity verification.** Birth month and day are guessable (365 combos) and the 2-attempt lockout is per *call*, so starting a new call resets it. Lock per patient, add a second factor, and rate-limit starts. Do not return medication names to the model until the stronger check passes.
+- [ ] **Stronger identity verification.** Birth month and day are guessable (365 combos) and the lockout is 2 tries per call plus 4 wrong guesses per patient per hour (which also lets a stranger lock a real patient out; add a staff unlock). Add a second factor and rate-limit call starts. Do not return medication names to the model until the stronger check passes.
 - [ ] **Webhook auth.** Today it is one static shared secret in the `X-Webhook-Secret` header (Agora tool headers are static). Rotate it, store it in a secrets manager, add rate limiting and, if possible, IP allow-listing for Agora's egress or a signed-request scheme. Never log the header.
 - [ ] **Encryption.** TLS everywhere (including the tunnel replacement: a real domain and cert). Encrypt data at rest (managed Postgres with KMS-backed disk encryption, or SQLCipher). Encrypt backups.
-- [ ] **Production database.** Replace SQLite and the seeded fictional patient: Postgres, migrations, backups, retention and deletion policy, least-privilege DB user, real patient lookup from your EHR/roster.
+- [ ] **Production database.** Postgres on Supabase with row level security is in place. Still to do: backups and point-in-time recovery, a retention and deletion policy, a least-privilege database user instead of the owner, pin Supabase's CA certificate (the connection is encrypted but the certificate is not verified today), column-level encryption for names and birth dates, remove the seeded fictional patient, and sync patients from your EHR or roster.
 - [ ] **No PHI in logs.** The alert log stores free-text `details`, the console prints alerts, and the live feed carries tool results. Redact or tokenize, restrict access, set retention. Remove the in-memory event history or move it behind auth.
 - [ ] **Secrets.** `MURF_API_KEY` and `LLM_API_KEY` are sent to Agora in each `/join` body; confirm Agora's handling, use scoped keys, rotate. Rotate any key that has ever been pasted into chat or a ticket (the Murf key used during development was).
 

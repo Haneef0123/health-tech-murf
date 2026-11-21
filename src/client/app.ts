@@ -9,6 +9,7 @@ const stopBtn = $<HTMLButtonElement>('stop');
 const statusEl = $('status');
 const speakingEl = $('speaking');
 const eventsEl = $('events');
+const patientSel = $<HTMLSelectElement>('patient');
 
 let client: IAgoraRTCClient | undefined;
 let mic: IMicrophoneAudioTrack | undefined;
@@ -50,7 +51,7 @@ async function start() {
     feed = new EventSource(`/api/calls/${channel}/events`);
     feed.onmessage = (m) => render(JSON.parse(m.data));
 
-    const s: StartResponse = await post('/api/agent/start', { channel });
+    const s: StartResponse = await post('/api/agent/start', { channel, patientId: patientSel.value });
     agentId = s.agentId;
     log('sys', `Agent ${s.agentId} started on channel ${s.channel}`);
 
@@ -87,6 +88,22 @@ async function stop(finalStatus = 'Idle') {
   setStatus(finalStatus);
   setBusy(false);
 }
+
+// Only patients who consented can be called (the server enforces this too).
+async function loadPatients() {
+  try {
+    const all: { id: string; first_name: string; last_name: string; consent_ai_call: boolean }[] = await (await fetch('/api/patients')).json();
+    const callable = all.filter((p) => p.consent_ai_call);
+    for (const p of callable) patientSel.add(new Option(`${p.first_name} ${p.last_name}`.trim(), p.id));
+    const wanted = new URLSearchParams(location.search).get('patient');
+    if (wanted && callable.some((p) => p.id === wanted)) patientSel.value = wanted;
+    if (!callable.length) { startBtn.disabled = true; log('err', 'No patient has consented to AI check-in calls. Add one on the Patients page.'); }
+  } catch (e) {
+    startBtn.disabled = true;
+    log('err', `Could not load patients: ${e instanceof Error ? e.message : e}`);
+  }
+}
+void loadPatients();
 
 startBtn.onclick = start;
 stopBtn.onclick = () => stop('Call ended');

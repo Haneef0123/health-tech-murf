@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { agoraConfig, murfConfig, webhookConfig } from '../config.js';
+import { HttpError } from '../errors.js';
 import { getStore } from '../store/store.js';
 import { agoraTools } from '../tools/registry.js';
 import { GREETING, SYSTEM_PROMPT } from './prompt.js';
@@ -73,7 +74,11 @@ async function agoraPost(path: string, body?: unknown): Promise<unknown> {
 
 export async function startAgent(input: StartAgentInput) {
   const i = startAgentInput.parse(input);
-  getStore().createCall(i.channel, i.patientId); // register before the agent can call any tool
+  const store = await getStore();
+  const patient = await store.getPatient(i.patientId);
+  if (!patient || !patient.active) throw new HttpError(404, 'unknown or inactive patient');
+  if (!patient.consent_ai_call) throw new HttpError(403, 'patient has not consented to AI check-in calls');
+  await store.createCall(i.channel, i.patientId); // register before the agent can call any tool
   const body = buildJoinBody(i, buildRtcToken(i.channel, i.agentUid));
   const res = (await agoraPost('/join', body)) as { agent_id: string; status: string };
   return {

@@ -35,7 +35,9 @@ const agoraSchema = z.object({
 
 const serverSchema = z.object({
   PORT: z.coerce.number().default(3000),
-  DB_PATH: z.string().default('data/app.db'),
+  // Postgres connection string (Supabase "Session pooler" URI). When unset, a local PGlite database is used at DB_PATH.
+  DATABASE_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().regex(/^postgres(ql)?:\/\//, 'must start with postgres:// or postgresql://').optional()),
+  DB_PATH: z.string().default('data/pglite'),
   NURSE_ALERT_LOG: z.string().default('data/nurse-alerts.log'),
 });
 

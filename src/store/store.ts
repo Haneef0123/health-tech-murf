@@ -1,89 +1,175 @@
+import { randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { serverConfig } from '../config.js';
 import { publish } from '../events.js';
+import type { Medication, Patient, PatientInput } from '../patients/schema.js';
+import { type Db, type OpenDb, openDb } from './db.js';
+import { migrate } from './schema.js';
 
-export interface Patient { id: string; first_name: string; birth_month: number; birth_day: number; medications: string[] }
-export interface CallRow { call_id: string; patient_id: string; verified: number; failed_attempts: number }
+export interface CallRow { call_id: string; patient_id: string; verified: boolean; failed_attempts: number }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS patients(id TEXT PRIMARY KEY, first_name TEXT NOT NULL, birth_month INTEGER NOT NULL, birth_day INTEGER NOT NULL, medications TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS calls(call_id TEXT PRIMARY KEY, patient_id TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, failed_attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS tool_results(tool_call_id TEXT PRIMARY KEY, call_id TEXT NOT NULL, tool TEXT NOT NULL, response TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS medication_logs(call_id TEXT PRIMARY KEY, picked_up INTEGER NOT NULL, dose_taken INTEGER NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS triage_logs(call_id TEXT PRIMARY KEY, fever INTEGER NOT NULL, swelling INTEGER NOT NULL, pain_score INTEGER NOT NULL, red_flag INTEGER NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS alerts(id INTEGER PRIMARY KEY AUTOINCREMENT, call_id TEXT NOT NULL, patient_id TEXT NOT NULL, reason TEXT NOT NULL, details TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(call_id, reason));
-`;
+// Fictional demo patient (not real PHI), seeded only into an empty database.
+const DEMO: PatientInput & { id: string } = {
+  id: 'demo-001', first_name: 'Alex', last_name: 'Demo', birth_date: '1990-03-14', phone: '', language: 'en-US',
+  discharge_date: null, procedure_name: 'knee surgery', emergency_contact_name: '', emergency_contact_phone: '', consent_ai_call: true,
+  medications: [
+    { name: 'Amoxicillin', dose: '500 milligrams', schedule: 'three times a day' },
+    { name: 'Ibuprofen', dose: '400 milligrams', schedule: 'as needed for pain' },
+  ],
+};
 
-// Fictional demo patient (not real PHI). Replace with your EHR lookup for production.
-const DEMO = { id: 'demo-001', first_name: 'Alex', birth_month: 3, birth_day: 14, medications: ['Amoxicillin 500 milligrams', 'Ibuprofen 400 milligrams'] };
+const PATIENT_COLS = `id, first_name, last_name, birth_date::text AS birth_date, phone, language, discharge_date::text AS discharge_date,
+  procedure_name, emergency_contact_name, emergency_contact_phone, consent_ai_call, active, created_at::text AS created_at`;
 
-const now = () => new Date().toISOString();
-const flag = (b: boolean) => (b ? 1 : 0);
+// Plain functions over a Db (not methods) so transactions can reuse them without the store referring to itself.
+async function loadPatients(db: Db, where: string, params: unknown[] = []): Promise<Patient[]> {
+  const rows = await db.query(`SELECT ${PATIENT_COLS} FROM patients ${where} ORDER BY created_at, id`, params);
+  if (!rows.length) return [];
+  const meds = await db.query('SELECT patient_id, name, dose, schedule FROM patient_medications ORDER BY patient_id, position, id');
+  return rows.map((r) => ({
+    ...(r as any),
+    medications: meds.filter((m) => m.patient_id === r.id).map(({ name, dose, schedule }) => ({ name, dose, schedule })),
+  }));
+}
+const loadPatient = async (db: Db, id: string) => (await loadPatients(db, 'WHERE id=$1', [id]))[0];
 
-export function createStore(dbPath: string, alertLogPath: string) {
-  if (dbPath !== ':memory:') mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new DatabaseSync(dbPath);
-  db.exec(SCHEMA);
-  db.prepare('INSERT OR IGNORE INTO patients VALUES (?,?,?,?,?)')
-    .run(DEMO.id, DEMO.first_name, DEMO.birth_month, DEMO.birth_day, JSON.stringify(DEMO.medications));
+async function writeMeds(db: Db, patientId: string, meds: Medication[]) {
+  await db.query('DELETE FROM patient_medications WHERE patient_id=$1', [patientId]);
+  for (const [i, m] of meds.entries()) {
+    await db.query('INSERT INTO patient_medications(patient_id,name,dose,schedule,position) VALUES ($1,$2,$3,$4,$5)', [patientId, m.name, m.dose, m.schedule, i]);
+  }
+}
 
-  const one = <T>(sql: string, ...p: (string | number)[]) => db.prepare(sql).get(...p) as unknown as T | undefined;
+const patientParams = (i: PatientInput) =>
+  [i.first_name, i.last_name, i.birth_date, i.phone, i.language, i.discharge_date, i.procedure_name, i.emergency_contact_name, i.emergency_contact_phone, i.consent_ai_call];
+
+function insertPatient(db: Db, input: PatientInput, id: string): Promise<Patient> {
+  return db.transaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO patients(id,first_name,last_name,birth_date,phone,language,discharge_date,procedure_name,emergency_contact_name,emergency_contact_phone,consent_ai_call)
+       VALUES ($1,$2,$3,$4::date,$5,$6,$7::date,$8,$9,$10,$11)`,
+      [id, ...patientParams(input)],
+    );
+    await writeMeds(tx, id, input.medications);
+    return (await loadPatient(tx, id))!;
+  });
+}
+
+function makeCore(db: Db, alertLogPath: string) {
+  const one = async <T>(sql: string, ...p: unknown[]) => (await db.query<T>(sql, p))[0];
 
   return {
-    getPatient(id: string): Patient | undefined {
-      const r = one<Omit<Patient, 'medications'> & { medications: string }>('SELECT * FROM patients WHERE id=?', id);
-      return r && { ...r, medications: JSON.parse(r.medications) };
+    // ---- patient profiles ----
+    getPatient: (id: string) => loadPatient(db, id),
+    listPatients: (includeInactive = false) => loadPatients(db, includeInactive ? '' : 'WHERE active'),
+    createPatient: (input: PatientInput, id: string = randomUUID()) => insertPatient(db, input, id),
+    updatePatient(id: string, input: PatientInput): Promise<Patient | undefined> {
+      return db.transaction(async (tx) => {
+        const r = await tx.query(
+          `UPDATE patients SET first_name=$2,last_name=$3,birth_date=$4::date,phone=$5,language=$6,discharge_date=$7::date,procedure_name=$8,
+             emergency_contact_name=$9,emergency_contact_phone=$10,consent_ai_call=$11,updated_at=now() WHERE id=$1 RETURNING id`,
+          [id, ...patientParams(input)],
+        );
+        if (!r.length) return undefined;
+        await writeMeds(tx, id, input.medications);
+        return loadPatient(tx, id);
+      });
     },
+    /** Soft delete: calls and alerts keep pointing at the patient. */
+    async deactivatePatient(id: string): Promise<boolean> {
+      return (await db.query('UPDATE patients SET active=false, updated_at=now() WHERE id=$1 RETURNING id', [id])).length > 0;
+    },
+    async seedDemoIfEmpty() {
+      if (!(await one('SELECT 1 AS x FROM patients LIMIT 1'))) await insertPatient(db, DEMO, DEMO.id);
+    },
+
+    // ---- calls and identity checks ----
     /** Starting a call under an existing id resets its verification state. */
-    createCall(callId: string, patientId: string) {
-      if (!this.getPatient(patientId)) throw new Error(`unknown patient ${patientId}`);
-      db.prepare('INSERT OR REPLACE INTO calls VALUES (?,?,0,0,?)').run(callId, patientId, now());
+    async createCall(callId: string, patientId: string) {
+      if (!(await loadPatient(db, patientId))) throw new Error(`unknown patient ${patientId}`);
+      await db.query(
+        `INSERT INTO calls(call_id,patient_id) VALUES ($1,$2)
+         ON CONFLICT (call_id) DO UPDATE SET patient_id=EXCLUDED.patient_id, verified=false, failed_attempts=0, created_at=now()`,
+        [callId, patientId],
+      );
     },
-    getCall: (callId: string) => one<CallRow>('SELECT * FROM calls WHERE call_id=?', callId),
-    markVerified: (callId: string) => void db.prepare('UPDATE calls SET verified=1 WHERE call_id=?').run(callId),
-    addFailedAttempt(callId: string): number {
-      db.prepare('UPDATE calls SET failed_attempts=failed_attempts+1 WHERE call_id=?').run(callId);
-      return one<CallRow>('SELECT * FROM calls WHERE call_id=?', callId)!.failed_attempts;
+    getCall: (callId: string) => one<CallRow>('SELECT call_id, patient_id, verified, failed_attempts FROM calls WHERE call_id=$1', callId),
+    markVerified: async (callId: string) => void (await db.query('UPDATE calls SET verified=true WHERE call_id=$1', [callId])),
+    async addFailedAttempt(callId: string): Promise<number> {
+      return (await one<{ failed_attempts: number }>('UPDATE calls SET failed_attempts=failed_attempts+1 WHERE call_id=$1 RETURNING failed_attempts', callId))!.failed_attempts;
     },
-    saveMedication: (callId: string, pickedUp: boolean, doseTaken: boolean) =>
-      void db.prepare('INSERT OR REPLACE INTO medication_logs VALUES (?,?,?,?)').run(callId, flag(pickedUp), flag(doseTaken), now()),
-    saveTriage: (callId: string, fever: boolean, swelling: boolean, pain: number, redFlag: boolean) =>
-      void db.prepare('INSERT OR REPLACE INTO triage_logs VALUES (?,?,?,?,?,?)').run(callId, flag(fever), flag(swelling), pain, flag(redFlag), now()),
+    recordVerifyFailure: async (patientId: string) => void (await db.query('INSERT INTO verify_failures(patient_id) VALUES ($1)', [patientId])),
+    async recentVerifyFailures(patientId: string, minutes: number): Promise<number> {
+      return (await one<{ n: number }>(`SELECT count(*)::int AS n FROM verify_failures WHERE patient_id=$1 AND at > now() - ($2::int * interval '1 minute')`, patientId, minutes))!.n;
+    },
+
+    // ---- call data ----
+    saveMedication: async (callId: string, pickedUp: boolean, doseTaken: boolean) =>
+      void (await db.query(
+        `INSERT INTO medication_logs(call_id,picked_up,dose_taken) VALUES ($1,$2,$3)
+         ON CONFLICT (call_id) DO UPDATE SET picked_up=EXCLUDED.picked_up, dose_taken=EXCLUDED.dose_taken, created_at=now()`,
+        [callId, pickedUp, doseTaken],
+      )),
+    saveTriage: async (callId: string, fever: boolean, swelling: boolean, pain: number, redFlag: boolean) =>
+      void (await db.query(
+        `INSERT INTO triage_logs(call_id,fever,swelling,pain_score,red_flag) VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (call_id) DO UPDATE SET fever=EXCLUDED.fever, swelling=EXCLUDED.swelling, pain_score=EXCLUDED.pain_score, red_flag=EXCLUDED.red_flag, created_at=now()`,
+        [callId, fever, swelling, pain, redFlag],
+      )),
 
     /** One alert per (call, reason); repeats are no-ops and are not re-logged. */
-    raiseAlert(callId: string, patientId: string, reason: string, details: string) {
-      const ts = now();
-      const ins = db.prepare('INSERT OR IGNORE INTO alerts(call_id,patient_id,reason,details,created_at) VALUES (?,?,?,?,?)')
-        .run(callId, patientId, reason, details, ts);
-      const id = one<{ id: number }>('SELECT id FROM alerts WHERE call_id=? AND reason=?', callId, reason)!.id;
-      const isNew = Number(ins.changes) === 1;
-      if (isNew) {
-        const entry = { ts, level: 'NURSE_ALERT', alert_id: id, call_id: callId, patient_id: patientId, reason, details };
-        console.warn(`[NURSE ALERT] ${JSON.stringify(entry)}`);
-        mkdirSync(dirname(alertLogPath), { recursive: true });
-        appendFileSync(alertLogPath, JSON.stringify(entry) + '\n');
-        publish({ call_id: callId, type: 'alert', reason, details });
-      }
-      return { id, isNew };
+    async raiseAlert(callId: string, patientId: string, reason: string, details: string) {
+      const ins = await db.query<{ id: number }>(
+        'INSERT INTO alerts(call_id,patient_id,reason,details) VALUES ($1,$2,$3,$4) ON CONFLICT (call_id, reason) DO NOTHING RETURNING id',
+        [callId, patientId, reason, details],
+      );
+      if (!ins.length) return { id: Number((await one<{ id: number }>('SELECT id FROM alerts WHERE call_id=$1 AND reason=$2', callId, reason))!.id), isNew: false };
+      const id = Number(ins[0].id);
+      const entry = { ts: new Date().toISOString(), level: 'NURSE_ALERT', alert_id: id, call_id: callId, patient_id: patientId, reason, details };
+      console.warn(`[NURSE ALERT] ${JSON.stringify(entry)}`);
+      mkdirSync(dirname(alertLogPath), { recursive: true });
+      appendFileSync(alertLogPath, JSON.stringify(entry) + '\n');
+      publish({ call_id: callId, type: 'alert', reason, details });
+      return { id, isNew: true };
     },
-    listAlerts: (callId: string) => db.prepare('SELECT * FROM alerts WHERE call_id=? ORDER BY id').all(callId),
+    listAlerts: (callId: string) => db.query('SELECT id, call_id, patient_id, reason, details FROM alerts WHERE call_id=$1 ORDER BY id', [callId]),
 
-    getResult: (toolCallId: string) => one<{ response: string }>('SELECT response FROM tool_results WHERE tool_call_id=?', toolCallId)?.response,
-    saveResult: (toolCallId: string, callId: string, tool: string, response: string) =>
-      void db.prepare('INSERT INTO tool_results VALUES (?,?,?,?,?)').run(toolCallId, callId, tool, response, now()),
-
-    transaction<T>(fn: () => T): T {
-      db.exec('BEGIN');
-      try { const r = fn(); db.exec('COMMIT'); return r; } catch (e) { db.exec('ROLLBACK'); throw e; }
+    // ---- tool-call idempotency ----
+    async getResult(toolCallId: string) {
+      return (await one<{ response: string }>('SELECT response FROM tool_results WHERE tool_call_id=$1', toolCallId))?.response;
     },
+    saveResult: async (toolCallId: string, callId: string, tool: string, response: string) =>
+      void (await db.query('INSERT INTO tool_results(tool_call_id,call_id,tool,response) VALUES ($1,$2,$3,$4) ON CONFLICT (tool_call_id) DO NOTHING', [toolCallId, callId, tool, response])),
+    /** Serializes concurrent requests that carry the same tool_call_id (use inside a transaction). */
+    lockToolCall: async (toolCallId: string) => void (await db.query('SELECT pg_advisory_xact_lock(hashtext($1))', [toolCallId])),
   };
 }
-export type Store = ReturnType<typeof createStore>;
 
-let singleton: Store | undefined;
-export function getStore(): Store {
-  const c = serverConfig();
-  return (singleton ??= createStore(c.DB_PATH, c.NURSE_ALERT_LOG));
+export interface Store extends ReturnType<typeof makeCore> {
+  /** Runs fn on a store bound to one database transaction (commit on return, rollback on throw). */
+  transaction<T>(fn: (s: Store) => Promise<T>): Promise<T>;
+}
+
+export function makeStore(db: Db, alertLogPath: string): Store {
+  return { ...makeCore(db, alertLogPath), transaction: (fn) => db.transaction((tx) => fn(makeStore(tx, alertLogPath))) };
+}
+
+/** Opens the database, applies migrations and seeds the demo patient into an empty database. */
+export async function createStore(target: string, alertLogPath: string): Promise<Store & { close(): Promise<void> }> {
+  const db: OpenDb = openDb(target);
+  await migrate(db);
+  const store = makeStore(db, alertLogPath);
+  await store.seedDemoIfEmpty();
+  return Object.assign(store, { close: () => db.close() });
+}
+
+let singleton: Promise<Store> | undefined;
+export function getStore(): Promise<Store> {
+  return (singleton ??= (() => {
+    const c = serverConfig();
+    // Without a real database the data would live on the host's disk and vanish on every deploy.
+    if (process.env.RENDER && !c.DATABASE_URL) throw new Error('DATABASE_URL is required on Render (the local database is wiped on every deploy)');
+    return createStore(c.DATABASE_URL ?? c.DB_PATH, c.NURSE_ALERT_LOG);
+  })());
 }

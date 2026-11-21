@@ -3,7 +3,7 @@ services:
   - type: web
     name: checkin-voice-agent
     runtime: node
-    plan: free # shortcut: free tier sleeps when idle and wipes the SQLite file on restart; use a paid plan + disk or Postgres for real use
+    plan: free # shortcut: free tier sleeps when idle (data is safe in Supabase); use a paid plan for always-on
     buildCommand: npm ci --include=dev && npm run build:client
     startCommand: npx tsx src/server.ts
     healthCheckPath: /health
@@ -26,6 +26,9 @@ services:
       # Without this, DeepSeek's reasoning text is spoken aloud during the call.
       - key: LLM_EXTRA_PARAMS
         value: '{"thinking":{"type":"disabled"}}'
+      # Supabase "Session pooler" connection string. Required: without it the app refuses to start on Render.
+      - key: DATABASE_URL
+        sync: false
       - key: LLM_API_KEY
         sync: false
       - key: MURF_API_KEY

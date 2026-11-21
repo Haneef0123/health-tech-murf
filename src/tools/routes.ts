@@ -18,8 +18,8 @@ export function webhookRouter(): Router {
   });
 
   for (const t of tools) {
-    r.post(`/${t.path}`, (req, res) => {
-      const out = runTool(getStore(), t, req.body);
+    r.post(`/${t.path}`, async (req, res) => {
+      const out = await runTool(await getStore(), t, req.body);
       // replays are not re-published, so the live feed shows each real call once
       if (out.fresh) publish({ call_id: out.call_id!, type: 'tool', tool: t.name, args: out.args, result: out.body });
       res.status(out.status).json(out.body);
