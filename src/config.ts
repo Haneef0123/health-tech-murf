@@ -67,6 +67,11 @@ export const agoraConfig = () => load(agoraSchema);
 export const serverConfig = () => load(serverSchema);
 export const authConfig = () => load(authSchema);
 // Render sets RENDER_EXTERNAL_URL to the service's public https URL, so no manual PUBLIC_BASE_URL is needed there.
-export const webhookConfig = () =>
-  load(webhookSchema, { ...process.env, PUBLIC_BASE_URL: process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL });
+export const webhookConfig = () => {
+  const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL;
+  if (!PUBLIC_BASE_URL) {
+    throw new Error('Calls need a public https address so Agora can reach the tool webhooks, and localhost has none. Use the deployed site, or set PUBLIC_BASE_URL to a tunnel or deployed URL.');
+  }
+  return load(webhookSchema, { ...process.env, PUBLIC_BASE_URL });
+};
 export const webhookSecret = () => load(secretSchema).WEBHOOK_SECRET; // auth only: no public URL needed
