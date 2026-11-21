@@ -49,7 +49,7 @@ app.get('/api/murf-test', async (_req, res) => {
 
 app.post('/api/agent/start', async (req, res) => {
   const body = z.object({ channel: z.string().optional(), patientId: z.string().optional() }).parse(req.body ?? {});
-  const channel = body.channel ?? `checkin-${Date.now().toString(36)}`;
+  const channel = body.channel ?? `carecall-${Date.now().toString(36)}`;
   res.json(await startAgent({ channel, patientId: body.patientId }));
 });
 

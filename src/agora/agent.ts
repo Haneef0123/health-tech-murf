@@ -22,7 +22,7 @@ export function buildJoinBody(i: z.output<typeof startAgentInput>, agentToken: s
   const m = murfConfig();
   const w = webhookConfig();
   return {
-    name: `checkin-${i.channel}-${Date.now()}`, // must be unique per agent
+    name: `carecall-${i.channel}-${Date.now().toString(36)}`, // must be unique per agent; no patient details, Agora is a third party
     properties: {
       channel: i.channel,
       token: agentToken,

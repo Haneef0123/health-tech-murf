@@ -42,6 +42,9 @@ function log(kind: keyof typeof CHIP, text: string, ts = new Date().toISOString(
   li.scrollIntoView({ block: 'nearest' });
 }
 
+// Internal ids are long and meaningless to a person; show the ends only.
+const short = (id: string) => (id.length > 12 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id);
+
 const STATE = { idle: 'pill pill-dot', busy: 'pill pill-primary', live: 'pill pill-pos pill-dot', fail: 'pill pill-neg' } as const;
 const setStatus = (s: string, state: keyof typeof STATE = 'busy') => { statusEl.textContent = s; statusEl.className = STATE[state]; };
 const setBusy = (inCall: boolean) => { startBtn.disabled = inCall; stopBtn.disabled = !inCall; };
@@ -64,21 +67,22 @@ async function start() {
   speakingEl.classList.remove('on');
   try {
     setStatus('Starting agent...');
-    const channel = `checkin-${Math.random().toString(36).slice(2, 8)}`;
+    const patientName = patientSel.selectedOptions[0]?.text ?? 'the patient';
+    const channel = `carecall-${Math.random().toString(36).slice(2, 8)}`;
     // open the feed first so no early tool event is missed
     feed = new EventSource(`/api/calls/${channel}/events`);
     feed.onmessage = (m) => render(JSON.parse(m.data));
 
     const s: StartResponse = await post('/api/agent/start', { channel, patientId: patientSel.value });
     agentId = s.agentId;
-    log('sys', `Agent ${s.agentId} started on channel ${s.channel}`);
+    log('sys', `Check-in call started with ${patientName}`, undefined, `Agent ${short(s.agentId)} · channel ${s.channel}`);
 
     const rtc = (client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' }));
     rtc.on('user-published', async (user, mediaType) => {
       await rtc.subscribe(user, mediaType);
-      if (mediaType === 'audio') { user.audioTrack?.play(); log('sys', 'Agent audio connected'); }
+      if (mediaType === 'audio') { user.audioTrack?.play(); log('sys', 'The agent joined the call'); }
     });
-    rtc.on('user-left', () => log('sys', 'Agent left the channel'));
+    rtc.on('user-left', () => log('sys', 'The agent left the call'));
     rtc.enableAudioVolumeIndicator();
     rtc.on('volume-indicator', (vols) => {
       const agent = vols.find((v) => v.uid === s.agentUid);
