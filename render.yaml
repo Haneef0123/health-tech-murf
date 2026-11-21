@@ -1,0 +1,37 @@
+# Render Blueprint. Secrets marked `sync: false` are asked for in the Render dashboard; they are never stored in this repo.
+services:
+  - type: web
+    name: checkin-voice-agent
+    runtime: node
+    plan: free # shortcut: free tier sleeps when idle and wipes the SQLite file on restart; use a paid plan + disk or Postgres for real use
+    buildCommand: npm ci --include=dev && npm run build:client
+    startCommand: npx tsx src/server.ts
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      # Login for the test page and /api (username below; the password is generated, see the service's Environment tab)
+      - key: BASIC_AUTH_USER
+        value: admin
+      - key: BASIC_AUTH_PASS
+        generateValue: true
+      # Shared secret Agora sends to the tool webhooks. Generated here and used only by this service.
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      # PUBLIC_BASE_URL is not needed: the app falls back to Render's RENDER_EXTERNAL_URL.
+      - key: LLM_URL
+        value: https://api.deepseek.com/chat/completions
+      - key: LLM_MODEL
+        value: deepseek-flash
+      - key: LLM_API_KEY
+        sync: false
+      - key: MURF_API_KEY
+        sync: false
+      - key: AGORA_APP_ID
+        sync: false
+      - key: AGORA_APP_CERTIFICATE
+        sync: false
+      - key: AGORA_CUSTOMER_ID
+        sync: false
+      - key: AGORA_CUSTOMER_SECRET
+        sync: false

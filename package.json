@@ -1,0 +1,33 @@
+{
+  "name": "post-discharge-voice-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "build:client": "esbuild src/client/app.ts --bundle --format=esm --outfile=public/app.js",
+    "dev": "npm run build:client && tsx watch src/server.ts",
+    "start": "npm run build:client && tsx src/server.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/client",
+    "murf:smoke": "tsx src/scripts/murf-smoke.ts",
+    "call:register": "tsx src/scripts/register-call.ts",
+    "verify": "bash scripts/verify.sh",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "agora-rtc-sdk-ng": "^4.24.10",
+    "agora-token": "^2.0.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Check-In Test Client</title>
+  <style>
+    :root { color-scheme: light dark; --alert: #c62828; --muted: #777; }
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 680px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+    .row { display: flex; gap: .5rem; align-items: center; margin: 1rem 0; flex-wrap: wrap; }
+    button { font: inherit; padding: .5rem 1rem; border-radius: 6px; border: 1px solid #8886; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    #start { background: #1b7f3b; color: #fff; border-color: #1b7f3b; }
+    #stop { background: var(--alert); color: #fff; border-color: var(--alert); }
+    #status { font-weight: 600; }
+    #speaking { color: var(--muted); min-height: 1.5em; }
+    ul { list-style: none; padding: 0; margin: 0; border-top: 1px solid #8884; }
+    li { padding: .4rem 0; border-bottom: 1px solid #8883; word-break: break-word; }
+    li time { color: var(--muted); font-size: .8em; margin-right: .5rem; }
+    li.alert { color: var(--alert); font-weight: 600; }
+    li.err { color: var(--alert); }
+    li.sys { color: var(--muted); }
+    code { font-size: .85em; }
+  </style>
+</head>
+<body>
+  <h1>Post-Discharge Check-In: test client</h1>
+  <p class="sys">Demo patient birth date: March 14. Test data only, no real PHI.</p>
+  <div class="row">
+    <button id="start">Start Check-In Call</button>
+    <button id="stop" disabled>End call</button>
+    <span id="status">Idle</span>
+  </div>
+  <div id="speaking" aria-live="polite"></div>
+  <h2 style="font-size:1rem">Live events</h2>
+  <ul id="events" aria-live="polite"></ul>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
